@@ -1,0 +1,511 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Trusted Admin Check:
+    // Verifies that the authenticated UID exists in the server-provisioned /admins/{uid} collection
+    // AND if a /users/{uid} profile document exists, its role == 'admin' and status == 'active'.
+    // Never grants admin privileges based on email address or client-supplied flags alone.
+    function isAdmin() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+             (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+              (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active'));
+    }
+
+    function isValidTimestamps(data) {
+      return data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    // Trusted Admins Collection (Read-Only for self/admin; never client-writable to prevent privilege escalation)
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    // Primary /users/{userId} Role & Account Status Document Validation
+    function isValidUserAccount(data) {
+      return data.keys().hasAll([
+               'name', 'email', 'phone', 'role', 'status', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'name', 'email', 'phone', 'role', 'status', 'createdAt', 'updatedAt'
+             ]) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 40 &&
+             data.role is string && data.role in ['member', 'admin'] &&
+             data.status is string && data.status in ['pending', 'active', 'approved', 'rejected', 'suspended'] &&
+             isValidTimestamps(data);
+    }
+
+    // Primary /users/{userId} Collection
+    // - Public registration can ONLY create a 'member' with status = 'pending' and never 'alphagym@yahoo.com'.
+    // - Members can read their own document and update only their name/phone, NEVER role or status.
+    // - Only trusted active Admins can approve/reject/suspend/activate member accounts.
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidUserAccount(incoming()) &&
+                       incoming().role == 'member' &&
+                       incoming().status == 'pending' &&
+                       incoming().email != 'alphagym@yahoo.com';
+      allow update: if isSignedIn() && isValidId(userId) &&
+                       isValidUserAccount(incoming()) &&
+                       incoming().email == existing().email &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Member can only update own name/phone; role & status are strictly immutable for members
+                         (request.auth.uid == userId &&
+                          existing().role == 'member' &&
+                          incoming().role == 'member' &&
+                          incoming().status == existing().status &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'updatedAt'])) ||
+                         // Trusted Admin can update member status (pending -> active / rejected / suspended), but never promote a member to admin
+                         (isAdmin() &&
+                          existing().role == 'member' &&
+                          incoming().role == 'member' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'status', 'updatedAt']))
+                       );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Entity 1: Admin Member Roster Validation
+    function isValidMember(data) {
+      return data.keys().hasAll([
+               'userId', 'fullName', 'email', 'phone', 'planName', 'monthlyFee',
+               'status', 'assignedTrainer', 'goal', 'attendanceCount',
+               'lastCheckInDate', 'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'fullName', 'email', 'phone', 'planName', 'monthlyFee',
+               'status', 'assignedTrainer', 'goal', 'attendanceCount',
+               'lastCheckInDate', 'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+             data.email is string && data.email.size() >= 1 && data.email.size() <= 120 &&
+             data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 40 &&
+             data.planName is string && data.planName in ['Starter', 'Pro Athlete', 'Elite VIP', 'Day Pass'] &&
+             data.monthlyFee is int && data.monthlyFee >= 0 && data.monthlyFee <= 100000 &&
+             data.status is string && data.status in ['Active', 'Expiring', 'Frozen', 'Overdue'] &&
+             data.assignedTrainer is string && data.assignedTrainer.size() <= 100 &&
+             data.goal is string && data.goal.size() <= 150 &&
+             data.attendanceCount is int && data.attendanceCount >= 0 && data.attendanceCount <= 100000 &&
+             data.lastCheckInDate is string && data.lastCheckInDate.size() <= 40 &&
+             data.notes is string && data.notes.size() <= 500 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 2: GymClass Validation
+    function isValidGymClass(data) {
+      return data.keys().hasAll([
+               'userId', 'title', 'coachName', 'category', 'scheduleTime',
+               'room', 'capacity', 'enrolledCount', 'intensity', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'title', 'coachName', 'category', 'scheduleTime',
+               'room', 'capacity', 'enrolledCount', 'intensity', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.coachName is string && data.coachName.size() >= 1 && data.coachName.size() <= 100 &&
+             data.category is string && data.category in ['Strength', 'HIIT', 'CrossFit', 'Mobility', 'Boxing'] &&
+             data.scheduleTime is string && data.scheduleTime.size() >= 1 && data.scheduleTime.size() <= 60 &&
+             data.room is string && data.room.size() >= 1 && data.room.size() <= 60 &&
+             data.capacity is int && data.capacity >= 1 && data.capacity <= 500 &&
+             data.enrolledCount is int && data.enrolledCount >= 0 && data.enrolledCount <= data.capacity &&
+             data.intensity is string && data.intensity in ['Moderate', 'High', 'Extreme'] &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 3: GymLead Validation
+    function isValidGymLead(data) {
+      return data.keys().hasAll([
+               'userId', 'prospectName', 'phone', 'source', 'interestedPlan',
+               'stage', 'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'prospectName', 'phone', 'source', 'interestedPlan',
+               'stage', 'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.prospectName is string && data.prospectName.size() >= 1 && data.prospectName.size() <= 100 &&
+             data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 40 &&
+             data.source is string && data.source in ['Walk-In', 'Instagram', 'Referral', 'Website'] &&
+             data.interestedPlan is string && data.interestedPlan.size() >= 1 && data.interestedPlan.size() <= 60 &&
+             data.stage is string && data.stage in ['New', 'Tour Booked', 'Trial Active', 'Won', 'Lost'] &&
+             data.notes is string && data.notes.size() <= 400 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 4: GymPayment Validation
+    function isValidGymPayment(data) {
+      return data.keys().hasAll([
+               'userId', 'memberId', 'memberName', 'amount', 'planName',
+               'paymentMethod', 'status', 'billingPeriod', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'memberId', 'memberName', 'amount', 'planName',
+               'paymentMethod', 'status', 'billingPeriod', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             isValidId(data.memberId) &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 100 &&
+             data.amount is int && data.amount >= 1 && data.amount <= 1000000 &&
+             data.planName is string && data.planName.size() >= 1 && data.planName.size() <= 60 &&
+             data.paymentMethod is string && data.paymentMethod in ['Card', 'Cash', 'Bank Transfer', 'Auto-Pay'] &&
+             data.status is string && data.status in ['Paid', 'Pending', 'Overdue'] &&
+             data.billingPeriod is string && data.billingPeriod.size() >= 1 && data.billingPeriod.size() <= 60 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 5: MemberProfile Validation (Shared Member Portal & Admin Approval System)
+    function isValidMemberProfile(data) {
+      return data.keys().hasAll([
+               'userId', 'fullName', 'email', 'phone', 'age', 'address',
+               'planName', 'monthlyFee', 'photoUri', 'role', 'status',
+               'startDate', 'expiryDate', 'daysRemaining', 'paymentStatus',
+               'attendanceCount', 'recentActivity', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'fullName', 'email', 'phone', 'age', 'address',
+               'planName', 'monthlyFee', 'photoUri', 'role', 'status',
+               'startDate', 'expiryDate', 'daysRemaining', 'paymentStatus',
+               'attendanceCount', 'recentActivity', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.userId) &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+             data.email is string && data.email.size() >= 1 && data.email.size() <= 120 &&
+             data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 40 &&
+             data.age is int && data.age >= 10 && data.age <= 120 &&
+             data.address is string && data.address.size() >= 1 && data.address.size() <= 250 &&
+             data.planName is string && data.planName in ['Starter', 'Pro Athlete', 'Elite VIP', 'Day Pass'] &&
+             data.monthlyFee is int && data.monthlyFee >= 0 && data.monthlyFee <= 100000 &&
+             data.photoUri is string && data.photoUri.size() <= 500 &&
+             data.role is string && data.role == 'member' &&
+             data.status is string && data.status in ['pending', 'active', 'approved', 'rejected', 'suspended'] &&
+             data.startDate is string && data.startDate.size() <= 40 &&
+             data.expiryDate is string && data.expiryDate.size() <= 40 &&
+             data.daysRemaining is int && data.daysRemaining >= 0 && data.daysRemaining <= 3650 &&
+             data.paymentStatus is string && data.paymentStatus in ['Paid', 'Pending', 'Pending Verification', 'Overdue', 'Cancelled', 'Suspended'] &&
+             data.attendanceCount is int && data.attendanceCount >= 0 && data.attendanceCount <= 100000 &&
+             data.recentActivity is string && data.recentActivity.size() <= 300 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 6: MemberPayment Validation
+    function isValidMemberPayment(data) {
+      return data.keys().hasAll([
+               'userId', 'memberName', 'planName', 'amount', 'paymentMethod',
+               'status', 'billingPeriod', 'receiptNumber', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'memberName', 'planName', 'amount', 'paymentMethod',
+               'status', 'billingPeriod', 'receiptNumber', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.userId) &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 100 &&
+             data.planName is string && data.planName.size() >= 1 && data.planName.size() <= 60 &&
+             data.amount is int && data.amount >= 1 && data.amount <= 1000000 &&
+             data.paymentMethod is string && data.paymentMethod in ['Card', 'Cash', 'Bank Transfer', 'Auto-Pay', 'UPI'] &&
+             data.status is string && data.status in ['Paid', 'Pending', 'Overdue'] &&
+             data.billingPeriod is string && data.billingPeriod.size() >= 1 && data.billingPeriod.size() <= 60 &&
+             data.receiptNumber is string && data.receiptNumber.size() >= 1 && data.receiptNumber.size() <= 60 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 7: MemberAttendance Validation
+    function isValidMemberAttendance(data) {
+      return data.keys().hasAll([
+               'userId', 'memberName', 'checkInDate', 'checkInTime',
+               'sessionType', 'verifiedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'memberName', 'checkInDate', 'checkInTime',
+               'sessionType', 'verifiedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.userId) &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 100 &&
+             data.checkInDate is string && data.checkInDate.size() >= 1 && data.checkInDate.size() <= 40 &&
+             data.checkInTime is string && data.checkInTime.size() >= 1 && data.checkInTime.size() <= 40 &&
+             data.sessionType is string && data.sessionType.size() >= 1 && data.sessionType.size() <= 80 &&
+             data.verifiedBy is string && data.verifiedBy.size() >= 1 && data.verifiedBy.size() <= 80 &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 8: RenewalRequest Validation
+    function isValidRenewalRequest(data) {
+      return data.keys().hasAll([
+               'userId', 'memberName', 'currentPlan', 'requestedPlan',
+               'durationMonths', 'paymentPreference', 'notes', 'status',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'memberName', 'currentPlan', 'requestedPlan',
+               'durationMonths', 'paymentPreference', 'notes', 'status',
+               'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.userId) &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 100 &&
+             data.currentPlan is string && data.currentPlan.size() >= 1 && data.currentPlan.size() <= 60 &&
+             data.requestedPlan is string && data.requestedPlan in ['Starter', 'Pro Athlete', 'Elite VIP', 'Day Pass'] &&
+             data.durationMonths is int && data.durationMonths >= 1 && data.durationMonths <= 36 &&
+             data.paymentPreference is string && data.paymentPreference in ['Card', 'Cash', 'Cash at Desk', 'Bank Transfer', 'Auto-Pay'] &&
+             data.notes is string && data.notes.size() <= 300 &&
+             data.status is string && data.status in ['pending', 'approved', 'rejected'] &&
+             isValidTimestamps(data);
+    }
+
+    // Entity 9: GymAnnouncement Validation
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll([
+               'authorId', 'title', 'body', 'category', 'priority', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'authorId', 'title', 'body', 'category', 'priority', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.authorId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 600 &&
+             data.category is string && data.category in ['General', 'Schedule', 'Promo', 'Maintenance'] &&
+             data.priority is string && data.priority in ['Normal', 'High', 'Urgent'] &&
+             isValidTimestamps(data);
+    }
+
+    // Existing Admin CRM Collections
+    match /users/{userId}/members/{memberId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(memberId) &&
+                    request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && isValidId(userId) &&
+                     request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(userId) && isValidId(memberId) &&
+                       request.auth.uid == userId &&
+                       isValidMember(incoming());
+      allow update: if isSignedIn() && isValidId(userId) && isValidId(memberId) &&
+                       request.auth.uid == userId &&
+                       isValidMember(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'fullName', 'email', 'phone', 'planName', 'monthlyFee',
+                         'status', 'assignedTrainer', 'goal', 'attendanceCount',
+                         'lastCheckInDate', 'notes', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(userId) && isValidId(memberId) &&
+                       request.auth.uid == userId && existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/classes/{classId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(classId) &&
+                    request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && isValidId(userId) &&
+                     request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(userId) && isValidId(classId) &&
+                       request.auth.uid == userId &&
+                       isValidGymClass(incoming());
+      allow update: if isSignedIn() && isValidId(userId) && isValidId(classId) &&
+                       request.auth.uid == userId &&
+                       isValidGymClass(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'coachName', 'category', 'scheduleTime',
+                         'room', 'capacity', 'enrolledCount', 'intensity', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(userId) && isValidId(classId) &&
+                       request.auth.uid == userId && existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/leads/{leadId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(leadId) &&
+                    request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && isValidId(userId) &&
+                     request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(userId) && isValidId(leadId) &&
+                       request.auth.uid == userId &&
+                       isValidGymLead(incoming());
+      allow update: if isSignedIn() && isValidId(userId) && isValidId(leadId) &&
+                       request.auth.uid == userId &&
+                       isValidGymLead(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'prospectName', 'phone', 'source', 'interestedPlan',
+                         'stage', 'notes', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(userId) && isValidId(leadId) &&
+                       request.auth.uid == userId && existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/payments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(paymentId) &&
+                    request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && isValidId(userId) &&
+                     request.auth.uid == userId && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(userId) && isValidId(paymentId) &&
+                       request.auth.uid == userId &&
+                       isValidGymPayment(incoming());
+      allow update: if isSignedIn() && isValidId(userId) && isValidId(paymentId) &&
+                       request.auth.uid == userId &&
+                       isValidGymPayment(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().memberId == existing().memberId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'memberName', 'amount', 'planName', 'paymentMethod',
+                         'status', 'billingPeriod', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(userId) && isValidId(paymentId) &&
+                       request.auth.uid == userId && existing().userId == request.auth.uid;
+    }
+
+    // Shared Collection 5: Member Profiles & Registration Approvals
+    match /member_profiles/{memberUid} {
+      allow get: if isSignedIn() && isValidId(memberUid) &&
+                    (request.auth.uid == memberUid || isAdmin() || (resource != null && existing().userId == request.auth.uid));
+      allow list: if isSignedIn() &&
+                     (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(memberUid) &&
+                       isValidMemberProfile(incoming()) && (
+                         (request.auth.uid == memberUid &&
+                          incoming().userId == request.auth.uid &&
+                          incoming().role == 'member' &&
+                          incoming().status == 'pending' &&
+                          incoming().email != 'alphagym@yahoo.com' &&
+                          incoming().attendanceCount == 0) ||
+                         isAdmin()
+                       );
+      allow update: if isSignedIn() && isValidId(memberUid) &&
+                       isValidMemberProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().role == 'member' &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Action 1: Member updates own non-privileged profile details
+                         (request.auth.uid == memberUid &&
+                          existing().userId == request.auth.uid &&
+                          incoming().status == existing().status &&
+                          incoming().planName == existing().planName &&
+                          incoming().monthlyFee == existing().monthlyFee &&
+                          incoming().startDate == existing().startDate &&
+                          incoming().expiryDate == existing().expiryDate &&
+                          incoming().daysRemaining == existing().daysRemaining &&
+                          incoming().paymentStatus == existing().paymentStatus &&
+                          incoming().attendanceCount == existing().attendanceCount &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'fullName', 'phone', 'age', 'address', 'photoUri', 'updatedAt'
+                          ])) ||
+                         // Action 2: Admin approves/rejects/suspends/activates member registration & membership dates
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'fullName', 'email', 'phone', 'age', 'address',
+                            'planName', 'monthlyFee', 'photoUri', 'status',
+                            'startDate', 'expiryDate', 'daysRemaining',
+                            'paymentStatus', 'attendanceCount', 'recentActivity', 'updatedAt'
+                          ]))
+                       );
+      allow delete: if isAdmin() && isValidId(memberUid);
+    }
+
+    // Shared Collection 6: Member Payments & Receipts (Admin-writable, Member-readable)
+    match /member_payments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(paymentId) &&
+                    (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isAdmin() && isValidId(paymentId) &&
+                       isValidMemberPayment(incoming());
+      allow update: if isAdmin() && isValidId(paymentId) &&
+                       isValidMemberPayment(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'memberName', 'planName', 'amount', 'paymentMethod',
+                         'status', 'billingPeriod', 'receiptNumber', 'updatedAt'
+                       ]);
+      allow delete: if isAdmin() && isValidId(paymentId);
+    }
+
+    // Shared Collection 7: Member Attendance Logs (Admin-writable, Member-readable)
+    match /member_attendance/{attendanceId} {
+      allow get: if isSignedIn() && isValidId(attendanceId) &&
+                    (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isAdmin() && isValidId(attendanceId) &&
+                       isValidMemberAttendance(incoming());
+      allow update: if isAdmin() && isValidId(attendanceId) &&
+                       isValidMemberAttendance(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'memberName', 'checkInDate', 'checkInTime',
+                         'sessionType', 'verifiedBy', 'updatedAt'
+                       ]);
+      allow delete: if isAdmin() && isValidId(attendanceId);
+    }
+
+    // Shared Collection 8: Membership Renewal Requests (Member-creatable, Admin-approvable)
+    match /renewal_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) &&
+                    (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(requestId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'pending' &&
+                       isValidRenewalRequest(incoming());
+      allow update: if isAdmin() && isValidId(requestId) &&
+                       isValidRenewalRequest(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'status', 'notes', 'updatedAt'
+                       ]);
+      allow delete: if isAdmin() && isValidId(requestId);
+    }
+
+    // Shared Collection 9: Gym Announcements (Admin-writable, Member-readable)
+    match /announcements/{announcementId} {
+      allow get: if isSignedIn() && isValidId(announcementId) && existing().title is string;
+      allow list: if isSignedIn() && existing().title is string;
+      allow create: if isAdmin() && isValidId(announcementId) &&
+                       incoming().authorId == request.auth.uid &&
+                       isValidAnnouncement(incoming());
+      allow update: if isAdmin() && isValidId(announcementId) &&
+                       isValidAnnouncement(incoming()) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'body', 'category', 'priority', 'updatedAt'
+                       ]);
+      allow delete: if isAdmin() && isValidId(announcementId);
+    }
+  }
+}

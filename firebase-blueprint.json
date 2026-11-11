@@ -1,0 +1,276 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted server-provisioned admin registry document used by security rules to verify gym administrator UIDs.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Admin Firebase Authentication UID" },
+        "email": { "type": "string", "description": "Authorized admin email (alphagym@yahoo.com)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["userId", "email", "createdAt"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Primary role and account status document keyed by Firebase Authentication UID in /users/{userId}.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full name of the user or ALPHA GYM ADMIN" },
+        "email": { "type": "string", "description": "Registered email address" },
+        "phone": { "type": "string", "description": "Registered phone number" },
+        "role": { "type": "string", "enum": ["admin", "member"], "description": "Verified security role" },
+        "status": { "type": "string", "enum": ["pending", "active", "approved", "rejected", "suspended"], "description": "Account lifecycle status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["name", "email", "phone", "role", "status", "createdAt", "updatedAt"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "An admin-managed gym member record.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the authenticated gym admin" },
+        "fullName": { "type": "string", "description": "Full name of the gym member" },
+        "email": { "type": "string", "description": "Contact email address" },
+        "phone": { "type": "string", "description": "Contact phone number" },
+        "planName": { "type": "string", "enum": ["Starter", "Pro Athlete", "Elite VIP", "Day Pass"], "description": "Membership tier" },
+        "monthlyFee": { "type": "integer", "description": "Monthly membership fee in USD" },
+        "status": { "type": "string", "enum": ["Active", "Expiring", "Frozen", "Overdue"], "description": "Membership account status" },
+        "assignedTrainer": { "type": "string", "description": "Name of assigned personal coach" },
+        "goal": { "type": "string", "description": "Primary fitness goal" },
+        "attendanceCount": { "type": "integer", "description": "Total gym check-in count" },
+        "lastCheckInDate": { "type": "string", "description": "Formatted date of most recent check-in" },
+        "notes": { "type": "string", "description": "CRM notes" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())" }
+      },
+      "required": [
+        "userId", "fullName", "email", "phone", "planName", "monthlyFee",
+        "status", "assignedTrainer", "goal", "attendanceCount",
+        "lastCheckInDate", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "GymClass": {
+      "title": "GymClass",
+      "description": "A scheduled group training class.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the authenticated gym admin" },
+        "title": { "type": "string", "description": "Class title" },
+        "coachName": { "type": "string", "description": "Coach name" },
+        "category": { "type": "string", "enum": ["Strength", "HIIT", "CrossFit", "Mobility", "Boxing"], "description": "Training discipline" },
+        "scheduleTime": { "type": "string", "description": "Schedule slot" },
+        "room": { "type": "string", "description": "Studio room" },
+        "capacity": { "type": "integer", "description": "Maximum class capacity" },
+        "enrolledCount": { "type": "integer", "description": "Current enrolled count" },
+        "intensity": { "type": "string", "enum": ["Moderate", "High", "Extreme"], "description": "Intensity level" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "title", "coachName", "category", "scheduleTime",
+        "room", "capacity", "enrolledCount", "intensity", "createdAt", "updatedAt"
+      ]
+    },
+    "GymLead": {
+      "title": "GymLead",
+      "description": "A prospective gym member in the sales CRM pipeline.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the authenticated gym admin" },
+        "prospectName": { "type": "string", "description": "Prospect name" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "source": { "type": "string", "enum": ["Walk-In", "Instagram", "Referral", "Website"], "description": "Lead source" },
+        "interestedPlan": { "type": "string", "description": "Target plan" },
+        "stage": { "type": "string", "enum": ["New", "Tour Booked", "Trial Active", "Won", "Lost"], "description": "Pipeline stage" },
+        "notes": { "type": "string", "description": "Follow-up notes" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "prospectName", "phone", "source", "interestedPlan",
+        "stage", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "GymPayment": {
+      "title": "GymPayment",
+      "description": "An admin billing record or invoice transaction.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the authenticated gym admin" },
+        "memberId": { "type": "string", "description": "Member ID" },
+        "memberName": { "type": "string", "description": "Member name" },
+        "amount": { "type": "integer", "description": "Amount in USD" },
+        "planName": { "type": "string", "description": "Plan name" },
+        "paymentMethod": { "type": "string", "enum": ["Card", "Cash", "Bank Transfer", "Auto-Pay"], "description": "Payment method" },
+        "status": { "type": "string", "enum": ["Paid", "Pending", "Overdue"], "description": "Payment status" },
+        "billingPeriod": { "type": "string", "description": "Billing cycle" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "memberId", "memberName", "amount", "planName",
+        "paymentMethod", "status", "billingPeriod", "createdAt", "updatedAt"
+      ]
+    },
+    "MemberProfile": {
+      "title": "MemberProfile",
+      "description": "A registered member account document shared between the Member Portal and Admin Approval System.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Authenticated UID of the member" },
+        "fullName": { "type": "string", "description": "Member full name" },
+        "email": { "type": "string", "description": "Member email address" },
+        "phone": { "type": "string", "description": "Member phone number" },
+        "age": { "type": "integer", "description": "Member age in years" },
+        "address": { "type": "string", "description": "Member residential address" },
+        "planName": { "type": "string", "enum": ["Starter", "Pro Athlete", "Elite VIP", "Day Pass"], "description": "Selected or assigned membership plan" },
+        "monthlyFee": { "type": "integer", "description": "Monthly fee in USD" },
+        "photoUri": { "type": "string", "description": "Optional profile photo URI" },
+        "role": { "type": "string", "enum": ["member"], "description": "User role (strictly member)" },
+        "status": { "type": "string", "enum": ["pending", "active", "approved", "rejected", "suspended"], "description": "Registration approval & account status" },
+        "startDate": { "type": "string", "description": "Membership start date set by admin" },
+        "expiryDate": { "type": "string", "description": "Membership expiry date set by admin" },
+        "daysRemaining": { "type": "integer", "description": "Days remaining in current billing cycle" },
+        "paymentStatus": { "type": "string", "enum": ["Paid", "Pending", "Overdue", "Cancelled"], "description": "Current billing status" },
+        "attendanceCount": { "type": "integer", "description": "Total verified gym check-ins" },
+        "recentActivity": { "type": "string", "description": "Summary of latest member activity" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())" }
+      },
+      "required": [
+        "userId", "fullName", "email", "phone", "age", "address",
+        "planName", "monthlyFee", "photoUri", "role", "status",
+        "startDate", "expiryDate", "daysRemaining", "paymentStatus",
+        "attendanceCount", "recentActivity", "createdAt", "updatedAt"
+      ]
+    },
+    "MemberPayment": {
+      "title": "MemberPayment",
+      "description": "Payment and digital receipt record for a specific member, writable only by Admin and readable by the owning member.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the member" },
+        "memberName": { "type": "string", "description": "Member full name" },
+        "planName": { "type": "string", "description": "Membership plan billed" },
+        "amount": { "type": "integer", "description": "Amount in USD" },
+        "paymentMethod": { "type": "string", "enum": ["Card", "Cash", "Bank Transfer", "Auto-Pay"], "description": "Payment method" },
+        "status": { "type": "string", "enum": ["Paid", "Pending", "Overdue"], "description": "Payment status" },
+        "billingPeriod": { "type": "string", "description": "Billing cycle label" },
+        "receiptNumber": { "type": "string", "description": "Official receipt reference code" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "memberName", "planName", "amount", "paymentMethod",
+        "status", "billingPeriod", "receiptNumber", "createdAt", "updatedAt"
+      ]
+    },
+    "MemberAttendance": {
+      "title": "MemberAttendance",
+      "description": "Verified attendance check-in record for a specific member, writable only by Admin and readable by the owning member.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the member" },
+        "memberName": { "type": "string", "description": "Member full name" },
+        "checkInDate": { "type": "string", "description": "Formatted check-in date" },
+        "checkInTime": { "type": "string", "description": "Formatted check-in time" },
+        "sessionType": { "type": "string", "description": "Workout or class session type" },
+        "verifiedBy": { "type": "string", "description": "Coach or desk admin who verified check-in" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "memberName", "checkInDate", "checkInTime",
+        "sessionType", "verifiedBy", "createdAt", "updatedAt"
+      ]
+    },
+    "RenewalRequest": {
+      "title": "RenewalRequest",
+      "description": "A membership renewal or plan upgrade request submitted by a member for admin review.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the requesting member" },
+        "memberName": { "type": "string", "description": "Member full name" },
+        "currentPlan": { "type": "string", "description": "Member current plan" },
+        "requestedPlan": { "type": "string", "enum": ["Starter", "Pro Athlete", "Elite VIP", "Day Pass"], "description": "Requested renewal plan" },
+        "durationMonths": { "type": "integer", "description": "Requested renewal duration in months" },
+        "paymentPreference": { "type": "string", "enum": ["Card", "Cash", "Bank Transfer", "Auto-Pay"], "description": "Preferred payment method" },
+        "notes": { "type": "string", "description": "Additional member notes" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Renewal processing status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "userId", "memberName", "currentPlan", "requestedPlan",
+        "durationMonths", "paymentPreference", "notes", "status",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "GymAnnouncement": {
+      "title": "GymAnnouncement",
+      "description": "Official Alpha Gym Centre announcement broadcast by Admin to all members.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "description": "Admin UID" },
+        "title": { "type": "string", "description": "Announcement headline" },
+        "body": { "type": "string", "description": "Announcement details" },
+        "category": { "type": "string", "enum": ["General", "Schedule", "Promo", "Maintenance"], "description": "Announcement category" },
+        "priority": { "type": "string", "enum": ["Normal", "High", "Urgent"], "description": "Urgency level" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "authorId", "title", "body", "category", "priority", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": "AdminUser",
+      "description": "Trusted administrator UID registry provisioned server-side"
+    },
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Primary role and account status documents keyed by Firebase Authentication UID"
+    },
+    "/users/{userId}/members/{memberId}": {
+      "schema": "Member",
+      "description": "Gym members managed by the authenticated gym admin"
+    },
+    "/users/{userId}/classes/{classId}": {
+      "schema": "GymClass",
+      "description": "Scheduled group training classes"
+    },
+    "/users/{userId}/leads/{leadId}": {
+      "schema": "GymLead",
+      "description": "Sales leads in the CRM pipeline"
+    },
+    "/users/{userId}/payments/{paymentId}": {
+      "schema": "GymPayment",
+      "description": "Admin membership invoices and payment records"
+    },
+    "/member_profiles/{memberUid}": {
+      "schema": "MemberProfile",
+      "description": "Member registration and profile documents shared between Member Portal and Admin Approvals"
+    },
+    "/member_payments/{paymentId}": {
+      "schema": "MemberPayment",
+      "description": "Member payment history and digital receipts"
+    },
+    "/member_attendance/{attendanceId}": {
+      "schema": "MemberAttendance",
+      "description": "Member verified attendance logs"
+    },
+    "/renewal_requests/{requestId}": {
+      "schema": "RenewalRequest",
+      "description": "Membership renewal requests submitted by members"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "GymAnnouncement",
+      "description": "Gym-wide announcements posted by admins and read by members"
+    }
+  }
+}

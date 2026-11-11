@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Alpha Gym</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="cd_gym_hero_banner">Alpha Gym performance studio floor</string>
+    <string name="cd_sign_out">Sign out of Alpha Gym</string>
+    <string name="cd_alpha_gym_logo">Alpha Gym Official Logo — A Unisex Gym</string>
+</resources>

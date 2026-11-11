@@ -1,0 +1,6 @@
+{
+  "name": "Alpha Gym",
+  "description": "Alpha Gym — A Unisex Gym CRM featuring a 3D Startup Logo experience, Admin Portal (member approvals, roster, classes, leads, billing, announcements), and Member Portal (featured gym banners, registration, approval gate, membership, payments, receipts, attendance, renewals).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
